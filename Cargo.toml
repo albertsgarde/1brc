@@ -9,6 +9,7 @@ edition = "2021"
 ahash = "0.8.11"
 fast-float = "0.2.0"
 memmap = "0.7.0"
+rayon = "1.10.0"
 rustc-hash = "2.0.0"
 
 
