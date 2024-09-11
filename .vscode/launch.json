@@ -25,6 +25,27 @@
             "sourceLanguages": [
                 "rust"
             ]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Main",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=brc",
+                    "--package=brc"
+                ],
+                "filter": {
+                    "name": "brc",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": [
+                "rust"
+            ]
         }
     ]
 }

@@ -1,6 +1,8 @@
-use std::{collections::HashMap, hash::Hasher, io::Write, path::Path};
+use std::{cmp::Ordering, collections::HashMap, hash::Hasher, io::Write, path::Path};
 
+use itertools::Itertools;
 use memmap::MmapOptions;
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use rustc_hash::{FxBuildHasher, FxHasher};
 
 type HashBuilder = FxBuildHasher;
@@ -8,7 +10,9 @@ type HashBuilder = FxBuildHasher;
 #[derive(Debug)]
 pub struct SummaryError {}
 
-fn to_string(mut data: Vec<(&str, f32, f32, f32, u32)>) -> String {
+type Summary<'a> = Vec<(&'a str, f32, f32, f32, u32)>;
+
+fn to_string(mut data: Summary) -> String {
     data.sort_by_key(|&(key, _, _, _, _)| key);
     let mut entries = data.into_iter();
     let mut result = "{".to_string();
@@ -36,8 +40,21 @@ fn hash_str(s: &[u8]) -> u64 {
     hash.finish()
 }
 
-pub fn summarize_slice(slice: &[u8]) -> Vec<(&str, f32, f32, f32, u32)> {
-    let mut cur_data: Vec<(&str, f32, f32, f32, u32)> = Vec::new();
+fn find_split_index(slice: &[u8], index: usize) -> usize {
+    assert!(index <= slice.len());
+    if index == 0 {
+        return index;
+    }
+    let mut split_index = index;
+    while index != slice.len() && slice[split_index] != b'\n' {
+        split_index += 1;
+    }
+    split_index + 1
+}
+
+pub fn summarize_slice(slice: &[u8]) -> Summary {
+    assert_ne!(slice.last(), Some(&b';'));
+    let mut cur_data: Summary = Summary::new();
 
     let mut indices: HashMap<u64, usize, HashBuilder> =
         HashMap::with_hasher(HashBuilder::default());
@@ -46,10 +63,8 @@ pub fn summarize_slice(slice: &[u8]) -> Vec<(&str, f32, f32, f32, u32)> {
         .split(|&c| c == b'\n')
         .filter(|line| !line.is_empty())
         .enumerate()
-        .take(10_000_000)
     {
         if index % 1_000_000 == 0 {
-            print!("Processed {} million lines\r", index / 1_000_000);
             std::io::stdout().flush().unwrap();
         }
 
@@ -77,53 +92,79 @@ pub fn summarize_slice(slice: &[u8]) -> Vec<(&str, f32, f32, f32, u32)> {
         *count += 1;
     }
 
+    cur_data.sort_by_key(|&(key, _, _, _, _)| key);
     cur_data
 }
 
-pub fn summarize(path: impl AsRef<Path>) -> Result<String, SummaryError> {
-    let mut cur_data: Vec<(&str, f32, f32, f32, u32)> = Vec::new();
+fn merge_summaries<'a>(a: Summary<'a>, b: Summary<'a>) -> Summary<'a> {
+    let mut result = vec![];
+    let mut a_iter = a.into_iter().peekable();
+    let mut b_iter = b.into_iter().peekable();
 
-    let mut indices: HashMap<u64, usize, HashBuilder> =
-        HashMap::with_hasher(HashBuilder::default());
+    let mut cur_a = a_iter.next();
+    let mut cur_b = b_iter.next();
+    loop {
+        if let Some((a_name, a_min, a_max, a_total, a_count)) = cur_a {
+            if let Some((b_name, b_min, b_max, b_total, b_count)) = cur_b {
+                match a_name.cmp(b_name) {
+                    Ordering::Less => {
+                        result.push((a_name, a_min, a_max, a_total, a_count));
+                        cur_a = a_iter.next();
+                    }
+                    Ordering::Equal => {
+                        result.push((
+                            a_name,
+                            a_min.min(b_min),
+                            a_max.max(b_max),
+                            a_total + b_total,
+                            a_count + b_count,
+                        ));
+                        cur_a = a_iter.next();
+                        cur_b = b_iter.next();
+                    }
+                    Ordering::Greater => {
+                        result.push((b_name, b_min, b_max, b_total, b_count));
+                        cur_b = b_iter.next();
+                    }
+                }
+            } else {
+                result.extend(cur_a.into_iter().chain(a_iter));
+                break;
+            }
+        } else {
+            result.extend(cur_b.into_iter().chain(b_iter));
+            break;
+        }
+    }
+    result
+}
+
+pub fn summarize(path: impl AsRef<Path>) -> Result<String, SummaryError> {
+    // Get number of cpus available.
+    let num_threads = num_cpus::get();
 
     // Create buffer for reading file line by line
     let file = std::fs::File::open(path).unwrap();
     let file = unsafe { MmapOptions::new().map(&file).unwrap() };
 
-    for (index, line) in file
-        .split(|&c| c == b'\n')
-        .filter(|line| !line.is_empty())
-        .enumerate()
-        .take(10_000_000)
-    {
-        if index % 1_000_000 == 0 {
-            print!("Processed {} million lines\r", index / 1_000_000);
-            std::io::stdout().flush().unwrap();
-        }
+    let len = find_split_index(&file, file.len().min(usize::MAX));
+    let total_slice = &file[..len - 1];
 
-        let mut split = line.split(|&c| c == b';');
-        let key = split.next().unwrap();
-        let value = fast_float::parse(split.next().unwrap()).unwrap();
+    let summary = (0..=num_threads)
+        .map(|i| find_split_index(total_slice, (total_slice.len() * i) / num_threads))
+        .tuple_windows()
+        .map(|(start, end)| {
+            if start == end {
+                &total_slice[start..start]
+            } else {
+                &total_slice[start..(end - 1)]
+            }
+        })
+        .par_bridge()
+        .map(|slice| summarize_slice(slice))
+        .reduce(Summary::new, |a, b| merge_summaries(a, b));
+    //.reduce(|a, b| merge_summaries(a, b))
+    //.unwrap();
 
-        let hash = hash_str(key);
-
-        let index = indices.entry(hash).or_insert_with(|| {
-            cur_data.push((
-                std::str::from_utf8(key).unwrap(),
-                f32::MAX,
-                f32::MIN,
-                0.0,
-                0,
-            ));
-            cur_data.len() - 1
-        });
-
-        let (_name, min, max, total, count) = &mut cur_data[*index];
-        *min = min.min(value);
-        *max = max.max(value);
-        *total += value;
-        *count += 1;
-    }
-
-    Ok(to_string(cur_data))
+    Ok(to_string(summary))
 }
