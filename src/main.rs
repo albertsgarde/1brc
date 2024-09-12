@@ -27,15 +27,16 @@ pub fn main() {
         })
         .with_extension("out");
 
+    let out = result_to_out(result.as_str());
     if args.write_output {
-        std::fs::write(out_path, result_to_out(result.as_str())).unwrap();
+        std::fs::write(out_path, out).unwrap();
     } else {
         let expected = std::fs::read_to_string(out_path).unwrap();
-        result.lines().zip(expected.lines()).enumerate().for_each(
-            |(line_index, (result, expected))| {
-                if result != expected {
+        out.lines().zip(expected.lines()).enumerate().for_each(
+            |(line_index, (out_line, expected))| {
+                if out_line != expected {
                     let output_path = data_path.with_extension("out.err");
-                    std::fs::write(output_path, result_to_out(result)).unwrap();
+                    std::fs::write(output_path, &out).unwrap();
                     panic!("Output does not match expected on line {}.", line_index);
                 }
             },
