@@ -32,7 +32,7 @@
             "name": "Main",
             "cargo": {
                 "args": [
-                    "build",
+                    "run",
                     "--bin=brc",
                     "--package=brc"
                 ],
