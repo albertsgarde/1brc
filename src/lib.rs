@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap, hash::Hasher, io::Write, path::Path};
+use std::{cmp::Ordering, collections::HashMap, hash::Hasher, path::Path};
 
 use itertools::Itertools;
 use memmap::MmapOptions;
@@ -127,11 +127,7 @@ fn summarize_slice(slice: &[u8]) -> Summary {
     let mut indices: HashMap<u64, usize, HashBuilder> =
         HashMap::with_hasher(HashBuilder::default());
 
-    for (index, line) in slice
-        .split(|&c| c == b'\n')
-        .filter(|line| !line.is_empty())
-        .enumerate()
-    {
+    for line in slice.split(|&c| c == b'\n').filter(|line| !line.is_empty()) {
         let mut split = line.split(|&c| c == b';');
         let key = split.next().unwrap();
         let value = fast_float::parse(split.next().unwrap()).unwrap();
@@ -160,7 +156,7 @@ fn summarize_slice(slice: &[u8]) -> Summary {
     cur_data
 }
 
-pub fn summarize(path: impl AsRef<Path>) -> Result<String, SummaryError> {
+pub fn summarize(path: impl AsRef<Path>, max_bytes: Option<usize>) -> Result<String, SummaryError> {
     // Get number of cpus available.
     let num_threads = num_cpus::get();
 
@@ -168,7 +164,7 @@ pub fn summarize(path: impl AsRef<Path>) -> Result<String, SummaryError> {
     let file = std::fs::File::open(path).unwrap();
     let file = unsafe { MmapOptions::new().map(&file).unwrap() };
 
-    let len = find_split_index(&file, file.len().min(1_000_000_000));
+    let len = find_split_index(&file, file.len().min(max_bytes.unwrap_or(usize::MAX)));
     let total_slice = &file[..len - 1];
 
     let summary = (0..=num_threads)

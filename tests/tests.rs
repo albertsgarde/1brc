@@ -12,7 +12,7 @@ macro_rules! brc_tests {
             let data_file_path = file_path.with_extension("txt");
             let out_file_path = file_path.with_extension("out");
             let expected = std::fs::read_to_string(out_file_path).unwrap();
-            let result = brc::summarize(&data_file_path);
+            let result = brc::summarize(&data_file_path, None);
             match result {
                 Ok(summary) => assert_eq!(expected, summary),
                 Err(_) => panic!("Error summarizing file {:?}", data_file_path.file_name().unwrap()),
