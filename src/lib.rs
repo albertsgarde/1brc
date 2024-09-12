@@ -67,6 +67,14 @@ impl<'a> SummaryEntry<'a> {
             "{name}={min_sign}{min_integer}.{min_decimal}/{mean_sign}{mean_integer}.{mean_decimal}/{max_sign}{max_integer}.{max_decimal}",
         )
     }
+
+    #[inline(always)]
+    fn update(&mut self, value: i32) {
+        self.min = self.min.min(value);
+        self.max = self.max.max(value);
+        self.total += value as i64;
+        self.count += 1;
+    }
 }
 
 struct Summary<'a> {
@@ -187,24 +195,23 @@ fn summarize_slice(slice: &[u8]) -> Summary {
     let mut index = 0;
     assert_ne!(slice.last(), Some(&b'.'));
 
-    loop {
+    while index < slice.len() {
         if slice.get(index) == Some(&b'\n') {
             index += 1;
             continue;
         }
+
+        assert_ne!(
+            slice.get(index),
+            Some(&b';'),
+            "A line should never start with a semicolon."
+        );
+
         if index != 0 {
             assert_eq!(slice[index - 1], b'\n');
             assert_ne!(slice.get(index), Some(&b'\n'));
         }
-        if let Some(&name_start) = slice.get(index) {
-            assert_ne!(
-                name_start, b';',
-                "A line should never start with a semicolon."
-            );
-        } else {
-            assert_eq!(slice.get(index - 1), Some(&b'\n'));
-            break;
-        };
+
         let name_start_index = index;
         index += 1;
         loop {
@@ -273,11 +280,7 @@ fn summarize_slice(slice: &[u8]) -> Summary {
             cur_data.len() - 1
         });
 
-        let entry = &mut cur_data.data[city_index];
-        entry.min = entry.min.min(value);
-        entry.max = entry.max.max(value);
-        entry.total += value as i64;
-        entry.count += 1;
+        cur_data.data[city_index].update(value);
 
         index += 1;
         if let Some(&new_line) = slice.get(index) {
