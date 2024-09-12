@@ -2,7 +2,7 @@ use std::{cmp::Ordering, collections::HashMap, hash::Hasher, path::Path};
 
 use itertools::Itertools;
 use memmap::MmapOptions;
-use rayon::iter::{ParallelBridge, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rustc_hash::{FxBuildHasher, FxHasher};
 
 type HashBuilder = FxBuildHasher;
@@ -10,8 +10,67 @@ type HashBuilder = FxBuildHasher;
 #[derive(Debug)]
 pub struct SummaryError {}
 
+#[derive(Debug, Clone, Copy)]
+struct SummaryEntry<'a> {
+    name: &'a str,
+    min: i32,
+    max: i32,
+    total: i64,
+    count: u32,
+}
+
+impl<'a> SummaryEntry<'a> {
+    fn new(name: &'a str) -> Self {
+        Self {
+            name,
+            min: i32::MAX,
+            max: i32::MIN,
+            total: 0,
+            count: 0,
+        }
+    }
+
+    fn into_string(self) -> String {
+        let Self {
+            name,
+            min,
+            max,
+            total,
+            count,
+        } = self;
+        let min_negative = min < 0;
+        let min = min.abs();
+        let max_negative = max < 0;
+        let max = max.abs();
+        let mean_negative = total < 0;
+        let total = total.abs();
+
+        let min_integer = min / 10;
+        let min_decimal = min % 10;
+        let max_integer = max / 10;
+        let max_decimal = max % 10;
+
+        let min_sign = if min_negative { "-" } else { "" };
+        let max_sign = if max_negative { "-" } else { "" };
+        let mean_sign = if mean_negative { "-" } else { "" };
+
+        let mean_times_ten = (total / count as i64)
+            + if (total.abs() % count as i64) * 2 >= count as i64 {
+                1
+            } else {
+                0
+            };
+        let mean_integer = mean_times_ten / 10;
+        let mean_decimal = mean_times_ten % 10;
+
+        format!(
+            "{name}={min_sign}{min_integer}.{min_decimal}/{mean_sign}{mean_integer}.{mean_decimal}/{max_sign}{max_integer}.{max_decimal}",
+        )
+    }
+}
+
 struct Summary<'a> {
-    data: Vec<(&'a str, f32, f32, f32, u32)>,
+    data: Vec<SummaryEntry<'a>>,
 }
 
 impl<'a> Summary<'a> {
@@ -31,26 +90,26 @@ impl<'a> Summary<'a> {
         let mut cur_a = a_iter.next();
         let mut cur_b = b_iter.next();
         loop {
-            if let Some((a_name, a_min, a_max, a_total, a_count)) = cur_a {
-                if let Some((b_name, b_min, b_max, b_total, b_count)) = cur_b {
-                    match a_name.cmp(b_name) {
+            if let Some(a) = cur_a {
+                if let Some(b) = cur_b {
+                    match a.name.cmp(b.name) {
                         Ordering::Less => {
-                            result.push((a_name, a_min, a_max, a_total, a_count));
+                            result.push(a);
                             cur_a = a_iter.next();
                         }
                         Ordering::Equal => {
-                            result.push((
-                                a_name,
-                                a_min.min(b_min),
-                                a_max.max(b_max),
-                                a_total + b_total,
-                                a_count + b_count,
-                            ));
+                            result.push(SummaryEntry {
+                                min: a.min.min(b.min),
+                                max: a.max.max(b.max),
+                                total: a.total + b.total,
+                                count: a.count + b.count,
+                                ..a
+                            });
                             cur_a = a_iter.next();
                             cur_b = b_iter.next();
                         }
                         Ordering::Greater => {
-                            result.push((b_name, b_min, b_max, b_total, b_count));
+                            result.push(b);
                             cur_b = b_iter.next();
                         }
                     }
@@ -67,38 +126,32 @@ impl<'a> Summary<'a> {
     }
 
     fn sort(&mut self) {
-        self.data.sort_by_key(|&(key, _, _, _, _)| key);
+        self.data.sort_by_key(|entry| entry.name);
+    }
+
+    fn into_result(mut self) -> String {
+        self.sort();
+        let mut entries = self.into_iter();
+        let mut result = "{".to_string();
+        if let Some(entry) = entries.next() {
+            result.push_str(&entry.into_string());
+        }
+        for entry in entries {
+            result.push_str(", ");
+            result.push_str(&entry.into_string());
+        }
+        result.push_str("}\n");
+        result
     }
 }
 
 impl<'a> IntoIterator for Summary<'a> {
-    type Item = (&'a str, f32, f32, f32, u32);
+    type Item = SummaryEntry<'a>;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.data.into_iter()
     }
-}
-
-fn to_string(mut data: Summary) -> String {
-    data.sort();
-    let mut entries = data.into_iter();
-    let mut result = "{".to_string();
-    if let Some((name, min, max, total, count)) = entries.next() {
-        result.push_str(&format!(
-            "{name}={min:.1}/{:.1}/{max:.1}",
-            ((total / (count as f32)) * 10.).round() / 10.
-        ));
-    }
-    for (name, min, max, total, count) in entries {
-        result.push_str(", ");
-        result.push_str(&format!(
-            "{name}={min:.1}/{:.1}/{max:.1}",
-            ((total / (count as f32)) * 10.).round() / 10.
-        ));
-    }
-    result.push_str("}\n");
-    result
 }
 
 fn hash_str(s: &[u8]) -> u64 {
@@ -210,7 +263,21 @@ fn summarize_slice(slice: &[u8]) -> Summary {
             .expect("Values should contain exactly one decimal.");
         assert!(decimal.is_ascii_digit());
         let value = (value * 10 + (decimal - b'0') as i32) * if negative { -1 } else { 1 };
-        let value = value as f32;
+
+        let hash = hash_str(name);
+
+        let &mut city_index = indices.entry(hash).or_insert_with(|| {
+            cur_data
+                .data
+                .push(SummaryEntry::new(std::str::from_utf8(name).unwrap()));
+            cur_data.len() - 1
+        });
+
+        let entry = &mut cur_data.data[city_index];
+        entry.min = entry.min.min(value);
+        entry.max = entry.max.max(value);
+        entry.total += value as i64;
+        entry.count += 1;
 
         index += 1;
         if let Some(&new_line) = slice.get(index) {
@@ -222,25 +289,6 @@ fn summarize_slice(slice: &[u8]) -> Summary {
         } else {
             break;
         }
-
-        let hash = hash_str(name);
-
-        let index = indices.entry(hash).or_insert_with(|| {
-            cur_data.data.push((
-                std::str::from_utf8(name).unwrap(),
-                f32::MAX,
-                f32::MIN,
-                0.0,
-                0,
-            ));
-            cur_data.len() - 1
-        });
-
-        let (_name, min, max, total, count) = &mut cur_data.data[*index];
-        *min = min.min(value);
-        *max = max.max(value);
-        *total += value;
-        *count += 1;
     }
 
     cur_data.sort();
@@ -258,7 +306,7 @@ pub fn summarize(path: impl AsRef<Path>, max_bytes: Option<usize>) -> Result<Str
     let len = find_split_index(&file, file.len().min(max_bytes.unwrap_or(usize::MAX)));
     let total_slice = &file[..len - 1];
 
-    let summary = (0..=num_threads)
+    let slices = (0..=num_threads)
         .map(|i| find_split_index(total_slice, (total_slice.len() * i) / num_threads))
         .tuple_windows()
         .map(|(start, end)| {
@@ -268,11 +316,24 @@ pub fn summarize(path: impl AsRef<Path>, max_bytes: Option<usize>) -> Result<Str
                 &total_slice[start..(end - 1)]
             }
         })
-        .par_bridge()
+        .collect::<Vec<_>>();
+    let summaries: Vec<Summary> = slices
+        .into_par_iter()
         .map(|slice| summarize_slice(slice))
-        .reduce(Summary::new, |a, b| a.merge(b));
-    //.reduce(|a, b| merge_summaries(a, b))
-    //.unwrap();
+        .collect();
+    let summary = summaries.into_iter().reduce(|a, b| a.merge(b)).unwrap();
 
-    Ok(to_string(summary))
+    Ok(summary.into_result())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn single() {
+        let slice = &[75, 117, 110, 109, 105, 110, 103, 59, 49, 57, 46, 56];
+        let summary = summarize_slice(slice);
+        assert_eq!(summary.len(), 1);
+    }
 }
