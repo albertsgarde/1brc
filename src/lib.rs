@@ -121,22 +121,113 @@ fn find_split_index(slice: &[u8], index: usize) -> usize {
 }
 
 fn summarize_slice(slice: &[u8]) -> Summary {
+    if slice.is_empty() {
+        return Summary::new();
+    }
+
     assert_ne!(slice.last(), Some(&b';'));
     let mut cur_data: Summary = Summary::new();
 
     let mut indices: HashMap<u64, usize, HashBuilder> =
         HashMap::with_hasher(HashBuilder::default());
 
-    for line in slice.split(|&c| c == b'\n').filter(|line| !line.is_empty()) {
-        let mut split = line.split(|&c| c == b';');
-        let key = split.next().unwrap();
-        let value = fast_float::parse(split.next().unwrap()).unwrap();
+    let mut index = 0;
+    assert_ne!(slice.last(), Some(&b'.'));
 
-        let hash = hash_str(key);
+    loop {
+        if slice.get(index) == Some(&b'\n') {
+            index += 1;
+            continue;
+        }
+        if index != 0 {
+            assert_eq!(slice[index - 1], b'\n');
+            assert_ne!(slice.get(index), Some(&b'\n'));
+        }
+        if let Some(&name_start) = slice.get(index) {
+            assert_ne!(
+                name_start, b';',
+                "A line should never start with a semicolon."
+            );
+        } else {
+            assert_eq!(slice.get(index - 1), Some(&b'\n'));
+            break;
+        };
+        let name_start_index = index;
+        index += 1;
+        loop {
+            if let Some(&c) = slice.get(index) {
+                if c == b';' {
+                    break;
+                }
+                index += 1;
+            } else {
+                unreachable!("Input should never end in the middle of a name.");
+            }
+        }
+        let name_end_index = index;
+        let name = &slice[name_start_index..name_end_index];
+        index += 1;
+        let negative = if let Some(&first_value_byte) = slice.get(index) {
+            if first_value_byte == b'-' {
+                index += 1;
+                true
+            } else {
+                false
+            }
+        } else {
+            unreachable!("Input should never end right after a semicolon.");
+        };
+        let mut value = if let Some(&first_digit) = slice.get(index) {
+            assert!(
+                first_digit.is_ascii_digit(),
+                "Value should start with a digit."
+            );
+            (first_digit - b'0') as i32
+        } else {
+            unreachable!("Input should never end right after a semicolon or negative sign.");
+        };
+        index += 1;
+        assert!(slice.len() >= index + 2);
+        loop {
+            if let Some(&b) = slice.get(index) {
+                if b == b'.' {
+                    index += 1;
+                    break;
+                }
+                assert!(
+                    b.is_ascii_digit(),
+                    "Value should only contain digits and a single period."
+                );
+                value = value * 10 + (b - b'0') as i32;
+                index += 1;
+            } else {
+                unreachable!("Input should never end in the middle of a value.");
+            }
+        }
+        assert!(slice[index - 1] == b'.');
+        let decimal = slice
+            .get(index)
+            .expect("Values should contain exactly one decimal.");
+        assert!(decimal.is_ascii_digit());
+        let value = (value * 10 + (decimal - b'0') as i32) * if negative { -1 } else { 1 };
+        let value = value as f32;
+
+        index += 1;
+        if let Some(&new_line) = slice.get(index) {
+            if new_line == b'\n' {
+                index += 1;
+            } else {
+                unreachable!("Values should end with a newline.");
+            }
+        } else {
+            break;
+        }
+
+        let hash = hash_str(name);
 
         let index = indices.entry(hash).or_insert_with(|| {
             cur_data.data.push((
-                std::str::from_utf8(key).unwrap(),
+                std::str::from_utf8(name).unwrap(),
                 f32::MAX,
                 f32::MIN,
                 0.0,
