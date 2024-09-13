@@ -2,10 +2,12 @@ use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
 struct Cli {
-    #[arg(default_value=None)]
+    #[arg(short='n', long, default_value=None)]
     max_bytes: Option<usize>,
-    #[arg(short = 'o', long)]
-    write_output: bool,
+    #[arg(short = 'r', long, default_value = "1")]
+    repeats: u32,
+    #[arg(required = true)]
+    versions: Vec<u32>,
 }
 
 fn result_to_out(result: &str) -> String {
@@ -14,11 +16,9 @@ fn result_to_out(result: &str) -> String {
 
 pub fn main() {
     let args = Cli::parse();
+    assert!(!args.versions.is_empty());
+    assert!(args.repeats > 0);
     let data_path = std::path::Path::new("data/measurements.txt");
-    let start_time = std::time::Instant::now();
-    let result = brc::summarize(data_path, args.max_bytes).unwrap();
-    let elapsed = start_time.elapsed();
-    println!("{}", elapsed.as_secs_f32());
     let out_path = data_path
         .with_file_name(if let Some(max_bytes) = args.max_bytes {
             format!("measurements_{max_bytes}")
@@ -26,20 +26,46 @@ pub fn main() {
             "measurements".to_string()
         })
         .with_extension("out");
+    let expected = std::fs::read_to_string(out_path).unwrap();
+    // Get number of cpus available.
+    let num_slices = rayon::current_num_threads();
 
-    let out = result_to_out(result.as_str());
-    if args.write_output {
-        std::fs::write(out_path, out).unwrap();
-    } else {
-        let expected = std::fs::read_to_string(out_path).unwrap();
-        out.lines().zip(expected.lines()).enumerate().for_each(
-            |(line_index, (out_line, expected))| {
-                if out_line != expected {
-                    let output_path = data_path.with_extension("out.err");
-                    std::fs::write(output_path, &out).unwrap();
-                    panic!("Output does not match expected on line {}.", line_index);
-                }
-            },
-        );
+    let version_funcs = brc::versions();
+    let versions = args
+        .versions
+        .iter()
+        .map(|&version_index| version_funcs[version_index as usize])
+        .collect::<Vec<_>>();
+    let mut runtimes = vec![vec![]; versions.len()];
+    for i in 0..args.repeats {
+        print!("{i}/{} ", args.repeats);
+        for (version_index, version) in versions.iter().enumerate() {
+            let start_time = std::time::Instant::now();
+            let result =
+                std::hint::black_box(version(data_path, args.max_bytes, num_slices)).unwrap();
+            runtimes[version_index].push(start_time.elapsed());
+            let result = result_to_out(result.as_str());
+            result.lines().zip(expected.lines()).enumerate().for_each(
+                |(line_index, (out_line, expected))| {
+                    if out_line != expected {
+                        let output_path = data_path.with_extension("out.err");
+                        std::fs::write(output_path, &result).unwrap();
+                        panic!("Output does not match expected on line {}.", line_index);
+                    }
+                },
+            );
+            print!(".");
+        }
+        print!("\r");
+    }
+    println!("Results from {} repetitions:", args.repeats);
+
+    for (version_index, runtimes) in runtimes.iter().enumerate() {
+        assert_eq!(runtimes.len(), args.repeats as usize);
+        let min_time = runtimes.iter().min().unwrap().as_secs_f32();
+        let max_time = runtimes.iter().max().unwrap().as_secs_f32();
+        let total_time = runtimes.iter().sum::<std::time::Duration>().as_secs_f32();
+        let average_time = total_time / args.repeats as f32;
+        println!("V{version_index}: {min_time:.2} / {average_time:.2} / {max_time:.2}",);
     }
 }
