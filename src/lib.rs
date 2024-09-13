@@ -162,6 +162,22 @@ impl<'a> IntoIterator for Summary<'a> {
     }
 }
 
+fn find_delimiter<const DELIM: u8>(word: u64) -> u8 {
+    const SPREADER: u64 = 0x0101_0101_0101_0101;
+    let delim_pattern: u64 = DELIM as u64 * SPREADER;
+    let input = word ^ delim_pattern;
+    let processed_input = input.wrapping_sub(SPREADER) & !input & (0x80 * SPREADER);
+    processed_input.trailing_zeros() as u8 >> 3 // The position of the first ; byte, or 8 if there is none.
+}
+
+fn find_delimiter_long<const DELIM: u8>(word: u128) -> u8 {
+    const SPREADER: u128 = 0x0101_0101_0101_0101_0101_0101_0101_0101;
+    let delim_pattern: u128 = DELIM as u128 * SPREADER;
+    let input = word ^ delim_pattern;
+    let processed_input = input.wrapping_sub(SPREADER) & !input & (0x80 * SPREADER);
+    processed_input.trailing_zeros() as u8 >> 3 // The position of the first ; byte, or 16 if there is none.
+}
+
 fn hash_str(s: &[u8]) -> u64 {
     let mut hash = FxHasher::default();
 
@@ -213,7 +229,15 @@ fn summarize_slice(slice: &[u8]) -> Summary {
         }
 
         let name_start_index = index;
-        index += 1;
+
+        while let Some(word_slice) = slice.get(index..index + 16) {
+            let word = u128::from_le_bytes(word_slice.try_into().unwrap());
+            let delimiter_offset = find_delimiter_long::<b';'>(word) as usize;
+            index += delimiter_offset;
+            if delimiter_offset != 16 {
+                break;
+            }
+        }
         loop {
             if let Some(&c) = slice.get(index) {
                 if c == b';' {
@@ -300,7 +324,8 @@ fn summarize_slice(slice: &[u8]) -> Summary {
 
 pub fn summarize(path: impl AsRef<Path>, max_bytes: Option<usize>) -> Result<String, SummaryError> {
     // Get number of cpus available.
-    let num_threads = num_cpus::get();
+    let num_slices = rayon::current_num_threads();
+    println!("Number of threads: {num_slices}");
 
     // Create buffer for reading file line by line
     let file = std::fs::File::open(path).unwrap();
@@ -309,8 +334,8 @@ pub fn summarize(path: impl AsRef<Path>, max_bytes: Option<usize>) -> Result<Str
     let len = find_split_index(&file, file.len().min(max_bytes.unwrap_or(usize::MAX)));
     let total_slice = &file[..len - 1];
 
-    let slices = (0..=num_threads)
-        .map(|i| find_split_index(total_slice, (total_slice.len() * i) / num_threads))
+    let slices = (0..=num_slices)
+        .map(|i| find_split_index(total_slice, (total_slice.len() * i) / num_slices))
         .tuple_windows()
         .map(|(start, end)| {
             if start == end {
