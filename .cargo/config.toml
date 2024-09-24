@@ -1,0 +1,5 @@
+[alias]
+b = "run --release -- bench"
+base = "run --release -- base"
+flame = "run --release -- flame"
+t = "nextest run"

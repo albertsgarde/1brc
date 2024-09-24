@@ -2,10 +2,10 @@
 ## Usage
 Run a benchmark of versions 1 and 2 with the following command:
 ```bash
-cargo run --release -- bench 1 2 -r 8
+cargo b 1 2 -r 8
 ```
 The `-r` flag specifies the number of repetitions.
-Run ```cargo run --release -- -h``` for more information on the available flags.
+Run ```cargo b -h``` for more information on the available flags.
 
 The benchmark will interleave the runs of each version in order to avoid any bias due to the order of execution.
 It will output the minimum, average, and maximum execution times of each version.
