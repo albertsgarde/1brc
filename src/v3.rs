@@ -3,10 +3,11 @@ use std::{cmp::Ordering, collections::HashMap, hash::Hasher, path::Path};
 use anyhow::Result;
 use itertools::Itertools;
 use memmap::MmapOptions;
+use nohash_hasher::BuildNoHashHasher;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use rustc_hash::{FxBuildHasher, FxHasher};
+use rustc_hash::FxHasher;
 
-type HashBuilder = FxBuildHasher;
+type HashBuilder = BuildNoHashHasher<u64>;
 
 #[derive(Debug, Clone, Copy)]
 struct SummaryEntry<'a> {

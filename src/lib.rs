@@ -14,4 +14,4 @@ macro_rules! summarize_functions {
     };
 }
 
-summarize_functions!(v0, v1, v2);
+summarize_functions!(v0, v1, v2, v3);
