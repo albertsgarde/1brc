@@ -42,7 +42,9 @@ pub fn main() {
         .collect::<Vec<_>>();
     let mut runtimes = vec![vec![]; versions.len()];
     for i in 0..args.repeats {
-        for (version_index, version) in versions.iter().enumerate() {
+        for (runtime_index, (version, &version_index)) in
+            versions.iter().zip(args.versions.iter()).enumerate()
+        {
             print!(
                 "\rRepeat {i:>2}/{:<2}  Version {version_index}                                    ",
                 args.repeats,
@@ -52,7 +54,7 @@ pub fn main() {
             let result =
                 std::hint::black_box(version(data_path, args.max_bytes, num_slices)).unwrap();
             let runtime = start_time.elapsed();
-            runtimes[version_index].push(runtime);
+            runtimes[runtime_index].push(runtime);
             let result = result_to_out(result.as_str());
             result.lines().zip(expected.lines()).enumerate().for_each(
                 |(line_index, (out_line, expected))| {
@@ -67,7 +69,7 @@ pub fn main() {
     }
     println!("\rResults from {} repetitions:", args.repeats);
 
-    for (runtimes, version_index) in runtimes.iter().zip(args.versions.iter()) {
+    for (runtimes, &version_index) in runtimes.iter().zip(args.versions.iter()) {
         assert_eq!(runtimes.len(), args.repeats as usize);
         let min_time = runtimes.iter().min().unwrap().as_secs_f32();
         let max_time = runtimes.iter().max().unwrap().as_secs_f32();
