@@ -1,3 +1,5 @@
+pub mod cli;
+
 use anyhow::Result;
 
 pub type SummarizeFn = fn(&std::path::Path, Option<usize>, usize) -> Result<String>;

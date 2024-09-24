@@ -2,7 +2,7 @@
 ## Usage
 Run a benchmark of versions 1 and 2 with the following command:
 ```bash
-cargo run --release -- 1 2 -r 8
+cargo run --release -- bench 1 2 -r 8
 ```
 The `-r` flag specifies the number of repetitions.
 Run ```cargo run --release -- -h``` for more information on the available flags.
