@@ -30,18 +30,10 @@
             "type": "lldb",
             "request": "launch",
             "name": "Main",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=brc",
-                    "--package=brc"
-                ],
-                "filter": {
-                    "name": "brc",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
+            "program": "${workspaceFolder}/target/debug/brc",
+            "args": [
+                "1"
+            ],
             "cwd": "${workspaceFolder}",
             "sourceLanguages": [
                 "rust"

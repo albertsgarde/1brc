@@ -84,6 +84,17 @@ impl<'a> Summary<'a> {
         Self { data: vec![] }
     }
 
+    fn from_hashmap(data: HashMap<u64, SummaryEntry<'a>, HashBuilder>) -> Self {
+        Self {
+            data: {
+                let mut vec: Vec<_> = data.into_values().collect();
+                vec.sort_by_key(|entry| entry.name);
+                vec
+            },
+        }
+    }
+
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.data.len()
     }
@@ -193,9 +204,8 @@ fn summarize_slice(slice: &[u8]) -> Summary {
     }
 
     assert_ne!(slice.last(), Some(&b';'));
-    let mut cur_data: Summary = Summary::new();
 
-    let mut indices: HashMap<u64, usize, HashBuilder> =
+    let mut cur_data: HashMap<u64, SummaryEntry, HashBuilder> =
         HashMap::with_hasher(HashBuilder::default());
 
     let mut index = 0;
@@ -280,14 +290,11 @@ fn summarize_slice(slice: &[u8]) -> Summary {
 
         let hash = hash_str(name);
 
-        let &mut city_index = indices.entry(hash).or_insert_with(|| {
-            cur_data
-                .data
-                .push(SummaryEntry::new(std::str::from_utf8(name).unwrap()));
-            cur_data.len() - 1
-        });
+        let city_data = cur_data
+            .entry(hash)
+            .or_insert_with(|| SummaryEntry::new(std::str::from_utf8(name).unwrap()));
 
-        cur_data.data[city_index].update(value);
+        city_data.update(value);
 
         index += 1;
         if let Some(&new_line) = slice.get(index) {
@@ -301,8 +308,7 @@ fn summarize_slice(slice: &[u8]) -> Summary {
         }
     }
 
-    cur_data.sort();
-    cur_data
+    Summary::from_hashmap(cur_data)
 }
 
 pub fn summarize(path: &Path, max_bytes: Option<usize>, num_slices: usize) -> Result<String> {
