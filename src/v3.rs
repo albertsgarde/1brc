@@ -19,6 +19,8 @@ struct SummaryEntry<'a> {
 }
 
 impl<'a> SummaryEntry<'a> {
+    /// Creates a new summary entry with the given name.
+    /// HOT
     fn new(name: &'a str) -> Self {
         Self {
             name,
@@ -29,6 +31,7 @@ impl<'a> SummaryEntry<'a> {
         }
     }
 
+    /// Converts the summary entry into a string to be used in the final output.
     fn into_string(self) -> String {
         let Self {
             name,
@@ -67,6 +70,8 @@ impl<'a> SummaryEntry<'a> {
         )
     }
 
+    /// Update the summary entry with a new value.
+    /// HOT
     #[inline(always)]
     fn update(&mut self, value: i32) {
         self.min = self.min.min(value);
@@ -85,6 +90,8 @@ impl<'a> Summary<'a> {
         Self { data: vec![] }
     }
 
+    /// Creates a new summary from a hashmap.
+    /// The result is sorted by station name.
     fn from_hashmap(data: HashMap<u64, SummaryEntry<'a>, HashBuilder>) -> Self {
         Self {
             data: {
@@ -147,6 +154,7 @@ impl<'a> Summary<'a> {
         self.data.sort_by_key(|entry| entry.name);
     }
 
+    /// Convert the summary into a string to be used as the final output.
     fn into_result(mut self) -> String {
         self.sort();
         let mut entries = self.into_iter();
@@ -172,6 +180,8 @@ impl<'a> IntoIterator for Summary<'a> {
     }
 }
 
+/// Given a 16-byte word, find the position of the first semicolon byte.
+/// HOT
 fn find_delimiter_long<const DELIM: u8>(word: u128) -> u8 {
     const SPREADER: u128 = 0x0101_0101_0101_0101_0101_0101_0101_0101;
     let delim_pattern: u128 = DELIM as u128 * SPREADER;
@@ -180,6 +190,8 @@ fn find_delimiter_long<const DELIM: u8>(word: u128) -> u8 {
     processed_input.trailing_zeros() as u8 >> 3 // The position of the first ; byte, or 16 if there is none.
 }
 
+/// Hash a string slice into a u64 using the FxHash algorithm.
+/// HOT
 fn hash_str(s: &[u8]) -> u64 {
     let mut hash = FxHasher::default();
 
@@ -187,6 +199,8 @@ fn hash_str(s: &[u8]) -> u64 {
     hash.finish()
 }
 
+/// Given a arbitrary index into the slice, find the first following index that is a works as a split index.
+/// This means finding the first newline character after the given index, or the end of the slice if there is none.
 fn find_split_index(slice: &[u8], index: usize) -> usize {
     assert!(index <= slice.len());
     if index == 0 {
@@ -199,6 +213,9 @@ fn find_split_index(slice: &[u8], index: usize) -> usize {
     split_index + 1
 }
 
+/// Create a summary of the given slice of bytes.
+/// This is the main function we are interested in optimizing.
+/// HOT
 fn summarize_slice(slice: &[u8]) -> Summary {
     if slice.is_empty() {
         return Summary::new();
@@ -213,6 +230,7 @@ fn summarize_slice(slice: &[u8]) -> Summary {
     assert_ne!(slice.last(), Some(&b'.'));
 
     while index < slice.len() {
+        // Skip empty lines
         if slice.get(index) == Some(&b'\n') {
             index += 1;
             continue;
@@ -225,10 +243,19 @@ fn summarize_slice(slice: &[u8]) -> Summary {
         );
 
         if index != 0 {
-            assert_eq!(slice[index - 1], b'\n');
-            assert_ne!(slice.get(index), Some(&b'\n'));
+            assert_eq!(
+                slice[index - 1],
+                b'\n',
+                "A line should always be preceeded by the start of the slice or a newline."
+            );
+            assert_ne!(
+                slice.get(index),
+                Some(&b'\n'),
+                "A line should never start with a newline"
+            );
         }
 
+        // Find the start and end of the name of the station.
         let name_start_index = index;
 
         while let Some(word_slice) = slice.get(index..index + 16) {
@@ -245,6 +272,10 @@ fn summarize_slice(slice: &[u8]) -> Summary {
         let name_end_index = index;
         let name = &slice[name_start_index..name_end_index];
         index += 1;
+
+        // Parse the value.
+        // This part is pretty complex. I think I can improve this without sacrificing performance.
+        // We start by checking if the value is negative.
         let negative = if let Some(&first_value_byte) = slice.get(index) {
             if first_value_byte == b'-' {
                 index += 1;
@@ -265,7 +296,10 @@ fn summarize_slice(slice: &[u8]) -> Summary {
             unreachable!("Input should never end right after a semicolon or negative sign.");
         };
         index += 1;
-        assert!(slice.len() >= index + 2);
+        assert!(
+            slice.len() >= index + 2,
+            "Value should contain at least one digit and a period with a following digit."
+        );
         loop {
             if let Some(&b) = slice.get(index) {
                 if b == b'.' {
@@ -288,7 +322,9 @@ fn summarize_slice(slice: &[u8]) -> Summary {
             .expect("Values should contain exactly one decimal.");
         assert!(decimal.is_ascii_digit());
         let value = (value * 10 + (decimal - b'0') as i32) * if negative { -1 } else { 1 };
+        // We have now fully parsed the value.
 
+        // Update the data for the station with the parsed value.
         let hash = hash_str(name);
 
         let city_data = cur_data
@@ -297,6 +333,7 @@ fn summarize_slice(slice: &[u8]) -> Summary {
 
         city_data.update(value);
 
+        // Skip to the next line or break if we are at the end of the slice.
         index += 1;
         if let Some(&new_line) = slice.get(index) {
             if new_line == b'\n' {
@@ -320,6 +357,7 @@ pub fn summarize(path: &Path, max_bytes: Option<usize>, num_slices: usize) -> Re
     let len = find_split_index(&file, file.len().min(max_bytes.unwrap_or(usize::MAX)));
     let total_slice = &file[..len - 1];
 
+    // Create a slice of the dataset for each thread.
     let slices = (0..=num_slices)
         .map(|i| find_split_index(total_slice, (total_slice.len() * i) / num_slices))
         .tuple_windows()
@@ -331,10 +369,12 @@ pub fn summarize(path: &Path, max_bytes: Option<usize>, num_slices: usize) -> Re
             }
         })
         .collect::<Vec<_>>();
+    // Summarize each slice.
     let summaries: Vec<Summary> = slices
         .into_par_iter()
         .map(|slice| summarize_slice(slice))
         .collect();
+    // Combine summaries.
     let summary = summaries.into_iter().reduce(|a, b| a.merge(b)).unwrap();
 
     Ok(summary.into_result())
