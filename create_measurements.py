@@ -30,7 +30,7 @@ def check_args(file_args):
     try:
         if len(file_args) != 2 or int(file_args[1]) <= 0:
             raise Exception()
-    except:
+    except Exception as _:
         print(
             "Usage:  create_measurements.sh <positive integer number of records to create>"
         )
