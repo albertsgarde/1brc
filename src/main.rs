@@ -8,6 +8,8 @@ struct Cli {
     max_bytes: Option<usize>,
     #[arg(short = 'r', long, default_value = "1")]
     repeats: u32,
+    #[arg(short = 'p', long, default_value = "8")]
+    num_threads: u32,
     #[arg(required = true)]
     versions: Vec<u32>,
 }
@@ -30,7 +32,7 @@ pub fn main() {
         .with_extension("out");
     let expected = std::fs::read_to_string(out_path).unwrap();
     // Get number of cpus available.
-    let num_slices = rayon::current_num_threads();
+    let num_slices = usize::try_from(args.num_threads).unwrap();
 
     let version_funcs = brc::versions();
     let versions = args
