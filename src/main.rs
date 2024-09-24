@@ -65,7 +65,7 @@ pub fn main() {
     }
     println!("\rResults from {} repetitions:", args.repeats);
 
-    for (version_index, runtimes) in runtimes.iter().enumerate() {
+    for (runtimes, version_index) in runtimes.iter().zip(args.versions.iter()) {
         assert_eq!(runtimes.len(), args.repeats as usize);
         let min_time = runtimes.iter().min().unwrap().as_secs_f32();
         let max_time = runtimes.iter().max().unwrap().as_secs_f32();
