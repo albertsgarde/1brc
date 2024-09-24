@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -38,27 +40,30 @@ pub fn main() {
         .collect::<Vec<_>>();
     let mut runtimes = vec![vec![]; versions.len()];
     for i in 0..args.repeats {
-        print!("{i}/{} ", args.repeats);
         for (version_index, version) in versions.iter().enumerate() {
+            print!(
+                "\rRepeat {i:>2}/{:<2}  Version {version_index}                                    ",
+                args.repeats,
+            );
+            std::io::stdout().flush().unwrap();
             let start_time = std::time::Instant::now();
             let result =
                 std::hint::black_box(version(data_path, args.max_bytes, num_slices)).unwrap();
-            runtimes[version_index].push(start_time.elapsed());
+            let runtime = start_time.elapsed();
+            runtimes[version_index].push(runtime);
             let result = result_to_out(result.as_str());
             result.lines().zip(expected.lines()).enumerate().for_each(
                 |(line_index, (out_line, expected))| {
                     if out_line != expected {
                         let output_path = data_path.with_extension("out.err");
                         std::fs::write(output_path, &result).unwrap();
-                        panic!("Output does not match expected on line {}.", line_index);
+                        panic!("Output for version {version_index} does not match expected on line {}.", line_index);
                     }
                 },
             );
-            print!(".");
         }
-        print!("\r");
     }
-    println!("Results from {} repetitions:", args.repeats);
+    println!("\rResults from {} repetitions:", args.repeats);
 
     for (version_index, runtimes) in runtimes.iter().enumerate() {
         assert_eq!(runtimes.len(), args.repeats as usize);
